@@ -17,21 +17,30 @@ try {
 
 const ALLOWED_IMAGE_HOSTS = ['res.cloudinary.com', 'cloudinary.com'];
 
+function parseDataUriImage(imageUrl) {
+  if (!imageUrl) return null;
+  const match = imageUrl.match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) return null;
+  const mimeType = match[1] || 'image/jpeg';
+  const base64Data = match[2];
+  return { mimeType, base64Data };
+}
+
 async function fetchImageAsBase64(imageUrl) {
   try {
     if (!imageUrl) return null;
 
     if (imageUrl.startsWith('data:')) {
-      const match = imageUrl.match(/^data:([^;]+);base64,(.+)$/);
-      if (!match) {
+      const parsed = parseDataUriImage(imageUrl);
+      if (!parsed) {
         console.error('Invalid data URI format for image');
         return null;
       }
 
       return {
         inlineData: {
-          data: match[2],
-          mimeType: match[1] || 'image/jpeg'
+          data: parsed.base64Data,
+          mimeType: parsed.mimeType
         }
       };
     }
@@ -56,6 +65,14 @@ async function fetchImageAsBase64(imageUrl) {
     console.error("Error fetching image:", error);
     return null;
   }
+}
+
+async function uploadBase64ToCloudinary(base64Data, mimeType, folder) {
+  const dataUri = `data:${mimeType || 'image/jpeg'};base64,${base64Data}`;
+  return cloudinary.uploader.upload(dataUri, {
+    folder,
+    resource_type: 'auto'
+  });
 }
 
 exports.operatorLogin = async (req, res) => {
@@ -115,10 +132,38 @@ exports.verifyAndSolveComplaint = async (req, res) => {
     // Default values for manual verification (no AI)
     let geminiDecision = { is_solved: true, confidence: 100, reason: "Manual verification" };
 
+    let normalizedOperatorImageUrl = operator_image_url;
+    if (operator_image_url && operator_image_url.startsWith('data:')) {
+      const parsed = parseDataUriImage(operator_image_url);
+      if (!parsed) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid base64 image format for operator image'
+        });
+      }
+
+      try {
+        const uploadResult = await uploadBase64ToCloudinary(
+          parsed.base64Data,
+          parsed.mimeType,
+          'operator-evidence'
+        );
+        if (uploadResult && uploadResult.secure_url) {
+          normalizedOperatorImageUrl = uploadResult.secure_url;
+        }
+      } catch (e) {
+        console.error('Cloudinary upload failed for base64 operator image:', e);
+        return res.status(500).json({
+          success: false,
+          message: 'Cloudinary upload failed for operator image'
+        });
+      }
+    }
+
     // Use Gemini AI for image comparison
-    if (genAI && complaint.imageUrl && operator_image_url) {
+    if (genAI && complaint.imageUrl && normalizedOperatorImageUrl) {
       const userImagePart = await fetchImageAsBase64(complaint.imageUrl);
-      const operatorImagePart = await fetchImageAsBase64(operator_image_url);
+      const operatorImagePart = await fetchImageAsBase64(normalizedOperatorImageUrl);
 
       if (userImagePart && operatorImagePart) {
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
@@ -151,7 +196,7 @@ Respond ONLY with a JSON object in this exact format:
 
     if (geminiDecision.is_solved && geminiDecision.confidence >= CONFIDENCE_THRESHOLD) {
       const previousStatus = complaint.status;
-      complaint.operatorImageUrl = operator_image_url;
+      complaint.operatorImageUrl = normalizedOperatorImageUrl;
       complaint.status = "Solved";
       complaint.geminiVerified = true;
       complaint.verificationConfidence = geminiDecision.confidence;

@@ -8,6 +8,21 @@ const cloudinary = require('cloudinary').v2;
 const { loginUser, getDashboardStats, getLeaderboard, getUserComplaints } = require('../controllers/userController');
 const router = express.Router();
 
+function parseDataUriImage(imageUrl) {
+    if (!imageUrl) return null;
+    const match = imageUrl.match(/^data:([^;]+);base64,(.+)$/);
+    if (!match) return null;
+    return { mimeType: match[1] || 'image/jpeg', base64Data: match[2] };
+}
+
+async function uploadBase64ToCloudinary(base64Data, mimeType, folder) {
+    const dataUri = `data:${mimeType || 'image/jpeg'};base64,${base64Data}`;
+    return cloudinary.uploader.upload(dataUri, {
+        folder,
+        resource_type: 'auto'
+    });
+}
+
 router.post('/login', loginUser);
 router.get('/dashboard', getDashboardStats);
 router.get('/leaderboard', getLeaderboard);
@@ -58,6 +73,18 @@ router.post('/complaint/with-image', upload.single('image'), async (req, res) =>
                 uploadStream.end(req.file.buffer);
             });
             imageUrl = result.secure_url;
+        } else if (req.body.imageUrl && req.body.imageUrl.startsWith('data:')) {
+            const parsed = parseDataUriImage(req.body.imageUrl);
+            if (!parsed) {
+                return res.status(400).json({ success: false, message: 'Invalid base64 image format' });
+            }
+
+            const uploadResult = await uploadBase64ToCloudinary(
+                parsed.base64Data,
+                parsed.mimeType,
+                'user-complaints'
+            );
+            imageUrl = uploadResult.secure_url;
         }
         
         const complaint = await require('../models/Complaint').create({
