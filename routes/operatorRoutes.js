@@ -1,16 +1,16 @@
 const express = require('express');
 const multer = require('multer');
-const upload = multer({ 
+const upload = multer({
   memoryStorage: true,
   limits: { fileSize: 5 * 1024 * 1024 }
 });
 const authMiddleware = require('../middleware/auth');
-const { 
-    operatorLogin, 
-    getAssignedComplaints, 
-    verifyAndSolveComplaint, 
-    updateComplaintStatus,
-    uploadOperatorEvidence 
+const {
+  operatorLogin,
+  getAssignedComplaints,
+  verifyAndSolveComplaint,
+  updateComplaintStatus,
+  uploadOperatorEvidence
 } = require('../controllers/operatorController');
 
 const router = express.Router();
