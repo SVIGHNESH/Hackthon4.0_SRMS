@@ -205,6 +205,34 @@ exports.updateComplaintStatus = async (req, res) => {
   }
 };
 
+exports.getOperatorStats = async (req, res) => {
+  try {
+    const operator = await Operator.findById(req.user.id);
+    if (!operator) return res.status(401).json({ success: false, message: "Operator not found" });
+
+    if (!operator.municipality_id) {
+      return res.status(400).json({ success: false, message: "No municipality assigned" });
+    }
+
+    const municipalityId = operator.municipality_id;
+
+    // Fetch ALL complaints, not just non-solved
+    const all = await Complaint.find({ municipality_id: municipalityId });
+
+    const stats = {
+      total: all.length,
+      pending: all.filter(c => c.status === 'Pending').length,
+      inProgress: all.filter(c => c.status === 'In Progress').length,
+      solved: all.filter(c => c.status === 'Solved').length,
+      escalated: all.filter(c => c.status === 'Escalated').length,
+    };
+
+    res.json({ success: true, stats });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.uploadOperatorEvidence = async (req, res) => {
   try {
     const { complaintId } = req.body;

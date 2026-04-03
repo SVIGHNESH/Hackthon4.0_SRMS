@@ -20,5 +20,5 @@ router.post('/complaints', authMiddleware, getAssignedComplaints);
 router.post('/verify-resolution', authMiddleware, verifyAndSolveComplaint);
 router.patch('/status', authMiddleware, updateComplaintStatus);
 router.post('/upload-evidence', authMiddleware, upload.single('evidence'), uploadOperatorEvidence);
-
+router.get('/stats', authMiddleware, getOperatorStats);
 module.exports = router;
