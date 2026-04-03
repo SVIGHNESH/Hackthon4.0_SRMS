@@ -119,9 +119,20 @@ exports.getAssignedComplaints = async (req, res) => {
 exports.verifyAndSolveComplaint = async (req, res) => {
   try {
     const { complaint_id, operator_image_url } = req.body;
+    const CONFIDENCE_THRESHOLD = 70;
 
     if (!complaint_id || !complaint_id.match(/^[0-9a-fA-F]{24}$/)) {
       return res.status(400).json({ success: false, message: "Invalid complaint ID format" });
+    }
+
+    if (!operator_image_url) {
+      return res.status(400).json({
+        success: false,
+        verified: false,
+        similarity: 0,
+        threshold: CONFIDENCE_THRESHOLD,
+        message: "operator_image_url is required"
+      });
     }
 
     const complaint = await Complaint.findById(complaint_id);
@@ -134,9 +145,6 @@ exports.verifyAndSolveComplaint = async (req, res) => {
     if (complaint.municipality_id && complaint.municipality_id.toString() !== operator.municipality_id?.toString()) {
       return res.status(403).json({ success: false, message: "You can only resolve complaints from your municipality" });
     }
-
-    // Default values for manual verification (no AI)
-    let geminiDecision = { is_solved: true, confidence: 100, reason: "Manual verification" };
 
     let normalizedOperatorImageUrl = operator_image_url;
     if (operator_image_url && operator_image_url.startsWith('data:')) {
@@ -166,14 +174,81 @@ exports.verifyAndSolveComplaint = async (req, res) => {
       }
     }
 
-    // Use Gemini AI for image comparison
-    if (genAI && complaint.imageUrl && normalizedOperatorImageUrl) {
-      const userImagePart = await fetchImageAsBase64(complaint.imageUrl);
-      const operatorImagePart = await fetchImageAsBase64(normalizedOperatorImageUrl);
+    if (!normalizedOperatorImageUrl) {
+      return res.status(400).json({
+        success: false,
+        verified: false,
+        similarity: 0,
+        threshold: CONFIDENCE_THRESHOLD,
+        message: "Invalid operator image URL"
+      });
+    }
 
-      if (userImagePart && operatorImagePart) {
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-        const prompt = `Image 1 is a civic complaint reported by a citizen. Image 2 is the resolution photo uploaded by the municipality operator.
+    const previousStatus = complaint.status;
+    complaint.operatorImageUrl = normalizedOperatorImageUrl;
+
+    const persistAndRespondFailure = async (statusCode, message, similarity, reason) => {
+      const safeSimilarity = Number.isFinite(similarity) ? Math.max(0, Math.min(100, similarity)) : 0;
+      complaint.geminiVerified = false;
+      complaint.verificationConfidence = safeSimilarity;
+      complaint.verificationReason = reason;
+      complaint.timeline.push({
+        status: previousStatus,
+        description: `Verification failed (${safeSimilarity}% similarity): ${reason}`,
+        date: new Date()
+      });
+      await complaint.save();
+
+      return res.status(statusCode).json({
+        success: false,
+        verified: false,
+        similarity: safeSimilarity,
+        threshold: CONFIDENCE_THRESHOLD,
+        message,
+        reason,
+        complaintId: complaint._id
+      });
+    };
+
+    if (!complaint.imageUrl) {
+      return persistAndRespondFailure(
+        400,
+        "Complaint image not found. Cannot verify resolution.",
+        0,
+        "Citizen complaint image is missing"
+      );
+    }
+
+    if (!genAI) {
+      return persistAndRespondFailure(
+        503,
+        "AI verification service is unavailable.",
+        0,
+        "Gemini AI is not configured"
+      );
+    }
+
+    const userImagePart = await fetchImageAsBase64(complaint.imageUrl);
+    const operatorImagePart = await fetchImageAsBase64(normalizedOperatorImageUrl);
+
+    if (!userImagePart || !operatorImagePart) {
+      return persistAndRespondFailure(
+        400,
+        "Unable to fetch one or both images for verification.",
+        0,
+        "Image download failed or URL host is not allowed"
+      );
+    }
+
+    let geminiDecision = {
+      is_solved: false,
+      confidence: 0,
+      reason: "AI could not verify the resolution"
+    };
+
+    try {
+      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      const prompt = `Image 1 is a civic complaint reported by a citizen. Image 2 is the resolution photo uploaded by the municipality operator.
 
 Analyze both carefully and rate how confident you are that Image 2 shows the RESOLVED version of the issue in Image 1.
 
@@ -184,30 +259,43 @@ Respond ONLY with a JSON object in this exact format:
 - Set "is_solved" to true ONLY if both images show the same location AND the issue appears to be resolved
 - "reason" should clearly explain why you think it's resolved or not`;
 
-        const result = await model.generateContent([prompt, userImagePart, operatorImagePart]);
-        const responseText = result.response.text();
+      const result = await model.generateContent([prompt, userImagePart, operatorImagePart]);
+      const responseText = result.response.text();
+      const sanitized = responseText.replace(/^\`\`\`json\s*/i, "").replace(/\`\`\`$/i, "").trim();
+      const parsed = JSON.parse(sanitized);
 
-        try {
-          const sanitized = responseText.replace(/^\`\`\`json\s*/i, "").replace(/\`\`\`$/i, "").trim();
-          geminiDecision = JSON.parse(sanitized);
-        } catch (e) {
-          console.log("Failed to parse Gemini response, defaulting to is_solved: false for safety");
-          geminiDecision = { is_solved: false, confidence: 0, reason: "Failed to parse AI response. Please try again." };
-        }
-      }
+      geminiDecision = {
+        is_solved: parsed.is_solved === true,
+        confidence: Number(parsed.confidence),
+        reason: typeof parsed.reason === 'string' && parsed.reason.trim()
+          ? parsed.reason.trim()
+          : "AI could not explain the verification result"
+      };
+    } catch (error) {
+      return persistAndRespondFailure(
+        502,
+        "Failed to process AI verification response.",
+        0,
+        "AI response parsing failed"
+      );
     }
 
-    // Use 70% confidence threshold for auto-verification
-    const CONFIDENCE_THRESHOLD = 70;
+    const similarity = Number.isFinite(geminiDecision.confidence)
+      ? Math.max(0, Math.min(100, geminiDecision.confidence))
+      : 0;
+    const verified = geminiDecision.is_solved && similarity >= CONFIDENCE_THRESHOLD;
 
-    if (geminiDecision.is_solved && geminiDecision.confidence >= CONFIDENCE_THRESHOLD) {
-      const previousStatus = complaint.status;
-      complaint.operatorImageUrl = normalizedOperatorImageUrl;
+    complaint.geminiVerified = verified;
+    complaint.verificationConfidence = similarity;
+    complaint.verificationReason = geminiDecision.reason;
+
+    if (verified) {
       complaint.status = "Solved";
-      complaint.geminiVerified = true;
-      complaint.verificationConfidence = geminiDecision.confidence;
-      complaint.verificationReason = geminiDecision.reason;
-      complaint.timeline.push({ status: previousStatus, description: `AI verified resolution (${geminiDecision.confidence}% confidence)`, date: new Date() });
+      complaint.timeline.push({
+        status: previousStatus,
+        description: `AI verified resolution (${similarity}% similarity)`,
+        date: new Date()
+      });
       await complaint.save();
 
       if (previousStatus !== 'Solved' && complaint.municipality_id) {
@@ -218,21 +306,33 @@ Respond ONLY with a JSON object in this exact format:
 
       return res.json({
         success: true,
+        verified: true,
+        similarity,
+        threshold: CONFIDENCE_THRESHOLD,
         message: "Issue verified and resolved successfully!",
-        confidence: geminiDecision.confidence,
         reason: geminiDecision.reason,
         complaint
       });
-    } else {
-      return res.status(400).json({
-        success: false,
-        message: geminiDecision.is_solved
-          ? `Low confidence (${geminiDecision.confidence}%). Please provide clearer verification photo.`
-          : "Images don't match. The verification photo doesn't show the resolved issue.",
-        confidence: geminiDecision.confidence || 0,
-        reason: geminiDecision.reason || "AI could not verify the resolution"
-      });
     }
+
+    complaint.timeline.push({
+      status: previousStatus,
+      description: `Verification failed (${similarity}% similarity): ${geminiDecision.reason}`,
+      date: new Date()
+    });
+    await complaint.save();
+
+    return res.status(400).json({
+      success: false,
+      verified: false,
+      similarity,
+      threshold: CONFIDENCE_THRESHOLD,
+      message: geminiDecision.is_solved
+        ? `Low similarity (${similarity}%). Please provide clearer verification photo.`
+        : "Images don't match. The verification photo doesn't show the resolved issue.",
+      reason: geminiDecision.reason,
+      complaintId: complaint._id
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

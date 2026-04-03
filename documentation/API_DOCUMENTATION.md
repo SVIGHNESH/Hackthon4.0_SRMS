@@ -264,15 +264,43 @@ Samadhanam (meaning "Solution" in Hindi) is a unified civic issue management sys
 
 #### 3. Verify and Solve Complaint (AI)
 - **Endpoint**: `POST /api/operator/verify-resolution`
-- **Description**: Verify resolution using Gemini AI image comparison
+- **Description**: Verify resolution by comparing complaint image and operator evidence image (uploaded directly to Cloudinary from frontend)
 - **Request Body**:
   ```json
   {
     "complaint_id": "...",
-    "operator_image_url": "https://cloudinary.com/..."
+    "operator_image_url": "https://res.cloudinary.com/..."
   }
   ```
-- **AI Response**: Compares user complaint image with operator's resolution image
+- **Verification Rules**:
+  - Complaint is marked `Solved` only when AI returns `is_solved: true` and similarity score is `>= 70`
+  - Similarity score is derived from Gemini confidence (`0-100`)
+  - If AI is unavailable/invalid, verification fails safely (complaint is not solved)
+  - Operator evidence URL is still stored for audit and retry
+- **Success Response (example)**:
+  ```json
+  {
+    "success": true,
+    "verified": true,
+    "similarity": 84,
+    "threshold": 70,
+    "message": "Issue verified and resolved successfully!",
+    "reason": "Same location and issue appears resolved",
+    "complaint": { "_id": "...", "status": "Solved" }
+  }
+  ```
+- **Failure Response (example)**:
+  ```json
+  {
+    "success": false,
+    "verified": false,
+    "similarity": 52,
+    "threshold": 70,
+    "message": "Low similarity (52%). Please provide clearer verification photo.",
+    "reason": "Location appears similar but issue is not clearly resolved",
+    "complaintId": "..."
+  }
+  ```
 
 #### 4. Update Complaint Status
 - **Endpoint**: `PATCH /api/operator/status`
@@ -650,7 +678,7 @@ unified-civic-backend/
 | **OPERATOR ROUTES** | | |
 | POST | `/api/operator/login` | Operator login |
 | POST | `/api/operator/complaints` | Get assigned complaints |
-| POST | `/api/operator/verify-resolution` | AI verify resolution |
+| POST | `/api/operator/verify-resolution` | AI verify resolution (70% threshold) |
 | PATCH | `/api/operator/status` | Update complaint status |
 | POST | `/api/operator/upload-evidence` | Upload resolution image |
 | **ADMIN ROUTES - STATE** | | |
