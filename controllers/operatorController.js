@@ -258,7 +258,7 @@ exports.verifyAndSolveComplaint = async (req, res) => {
       reason: "AI could not verify the resolution"
     };
 
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
     const prompt = `Image 1 is a civic complaint reported by a citizen. Image 2 is the resolution photo uploaded by the municipality operator.
 
 Analyze both carefully and rate how confident you are that Image 2 shows the RESOLVED version of the issue in Image 1.
