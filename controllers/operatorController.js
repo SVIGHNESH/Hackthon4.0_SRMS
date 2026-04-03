@@ -19,6 +19,23 @@ const ALLOWED_IMAGE_HOSTS = ['res.cloudinary.com', 'cloudinary.com'];
 
 async function fetchImageAsBase64(imageUrl) {
   try {
+    if (!imageUrl) return null;
+
+    if (imageUrl.startsWith('data:')) {
+      const match = imageUrl.match(/^data:([^;]+);base64,(.+)$/);
+      if (!match) {
+        console.error('Invalid data URI format for image');
+        return null;
+      }
+
+      return {
+        inlineData: {
+          data: match[2],
+          mimeType: match[1] || 'image/jpeg'
+        }
+      };
+    }
+
     const urlObj = new URL(imageUrl);
 
     if (!ALLOWED_IMAGE_HOSTS.includes(urlObj.hostname)) {
@@ -289,6 +306,26 @@ exports.uploadOperatorEvidence = async (req, res) => {
     res.json({ success: true, url: uploadResult.secure_url, complaint, message: 'Evidence uploaded successfully' });
   } catch (error) {
     console.error('uploadOperatorEvidence error:', error);
+    if (error && error.http_code === 403) {
+      return res.status(502).json({
+        success: false,
+        message: 'Cloudinary rejected the upload. Check CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_SECRET_KEY.'
+      });
+    }
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.cloudinaryHealth = async (req, res) => {
+  try {
+    const result = await cloudinary.api.ping();
+    res.json({ success: true, result });
+  } catch (error) {
+    console.error('cloudinaryHealth error:', error);
+    res.status(503).json({
+      success: false,
+      message: 'Cloudinary is not reachable or credentials are invalid',
+      error: error.message || 'Unknown error'
+    });
   }
 };

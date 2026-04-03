@@ -11,7 +11,8 @@ const {
   verifyAndSolveComplaint,
   updateComplaintStatus,
   uploadOperatorEvidence,
-  getOperatorStats
+  getOperatorStats,
+  cloudinaryHealth
 } = require('../controllers/operatorController');
 
 const router = express.Router();
@@ -22,4 +23,5 @@ router.post('/verify-resolution', authMiddleware, verifyAndSolveComplaint);
 router.patch('/status', authMiddleware, updateComplaintStatus);
 router.post('/upload-evidence', authMiddleware, upload.single('evidence'), uploadOperatorEvidence);
 router.get('/stats', authMiddleware, getOperatorStats);
+router.get('/cloudinary-health', authMiddleware, cloudinaryHealth);
 module.exports = router;
