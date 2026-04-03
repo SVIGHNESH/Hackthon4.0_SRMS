@@ -14,6 +14,7 @@ const {
     fetchComplaintsByMunicipality,
     getComplaintCategories,
     getStateStats,
+    getMunicipalStats,
     updateComplaintStatus,
     getComplaintById,
     uploadEvidence,
@@ -29,6 +30,7 @@ router.post('/state/fetchDistrict', authMiddleware, fetchDistrictById);
 router.get('/state/stats', authMiddleware, getStateStats);
 
 router.post('/municipal/login', municipalLogin);
+router.get('/municipal/stats', authMiddleware, getMunicipalStats);
 router.post('/municipal/allDistricts', fetchAllDistrictsPublic);
 router.post('/municipal/fetchDistrict', authMiddleware, fetchDistrictById);
 router.post('/municipal/fetchByName', authMiddleware, fetchComplaintsByMunicipality);

@@ -10,6 +10,8 @@ const ComplaintSchema = new mongoose.Schema({
     imageUrl: { type: String, default: null },
     operatorImageUrl: { type: String, default: null },
     geminiVerified: { type: Boolean, default: false },
+    verificationConfidence: { type: Number, default: null },
+    verificationReason: { type: String, default: null },
     user_imei: { type: String, required: true },
     municipality_id: { type: mongoose.Schema.Types.ObjectId, ref: 'municipality_new' },
     municipalityName: { type: String, default: "", index: true },

@@ -142,6 +142,39 @@ exports.getStateStats = async (req, res) => {
     }
 };
 
+exports.getMunicipalStats = async (req, res) => {
+    try {
+        const district_id = req.user.district_id;
+        
+        if (!district_id) {
+            return res.status(401).json({ success: false, message: 'Invalid token - no district_id' });
+        }
+        
+        const municipality = await Municipal.findOne({ district_id });
+        
+        if (!municipality) {
+            return res.status(404).json({ success: false, message: 'Municipality not found' });
+        }
+        
+        const complaints = await Complaint.find({ 
+            municipalityName: municipality.district_name 
+        });
+        
+        const stats = {
+            district_name: municipality.district_name,
+            state_name: municipality.state_name,
+            solved: municipality.solved || 0,
+            pending: municipality.pending || 0,
+            total: (municipality.solved || 0) + (municipality.pending || 0),
+            recentComplaints: complaints.slice(0, 10)
+        };
+        
+        res.json({ success: true, stats });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 const { normaliseStatus, isValidStatus, CANONICAL_STATUSES } = require('../utils/statusHelper');
 
 exports.updateComplaintStatus = async (req, res) => {

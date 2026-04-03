@@ -5,6 +5,7 @@ const router = express.Router();
 const User = require('../models/User');
 const Municipal = require('../models/Municipal');
 
+// --- DEVICE REGISTRATION ---
 router.post('/device/register', async (req, res) => {
   try {
     const { deviceId, createdAt } = req.body;
@@ -13,6 +14,7 @@ router.post('/device/register', async (req, res) => {
       return res.status(400).json({ success: false, message: 'deviceId is required' });
     }
 
+    // Check if user already exists
     let user = await User.findOne({ imei_id: deviceId });
 
     if (user) {
@@ -23,6 +25,7 @@ router.post('/device/register', async (req, res) => {
       });
     }
 
+    // Create new user if not found
     user = await User.create({
       imei_id: deviceId,
       rewardPoints: 0,
@@ -36,21 +39,22 @@ router.post('/device/register', async (req, res) => {
       userId: user._id.toString()
     });
   } catch (error) {
+    // Handle race conditions (duplicate key error)
     if (error.code === 11000) {
       const user = await User.findOne({ imei_id: req.body.deviceId });
-      if (!user) {
-        return res.status(500).json({ success: false, message: 'User not found after duplicate error' });
+      if (user) {
+        return res.json({
+          success: true,
+          message: 'Device already registered',
+          userId: user._id.toString()
+        });
       }
-      return res.json({
-        success: true,
-        message: 'Device already registered',
-        userId: user._id.toString()
-      });
     }
     res.status(500).json({ success: false, message: error.message });
   }
 });
 
+// --- DEVICE LOGIN ---
 router.post('/device/login', async (req, res) => {
   try {
     const { deviceId } = req.body;
@@ -61,10 +65,12 @@ router.post('/device/login', async (req, res) => {
 
     const user = await User.findOne({ imei_id: deviceId });
 
+    // Safety: If user is not found, return 404 so Flutter knows to call Register
     if (!user) {
       return res.status(404).json({ success: false, message: 'Device not registered' });
     }
 
+    // Successfully found user
     res.json({
       success: true,
       message: 'Login successful',
@@ -75,10 +81,10 @@ router.post('/device/login', async (req, res) => {
   }
 });
 
+// --- MUNICIPALITY STATS ---
 router.get('/municipality/stats/:name', async (req, res) => {
   try {
     const { name } = req.params;
-
     const municipality = await Municipal.findOne({ district_name: name });
 
     if (!municipality) {
@@ -103,10 +109,10 @@ router.get('/municipality/stats/:name', async (req, res) => {
   }
 });
 
+// --- USER COMPLAINTS ---
 router.get('/complaints/user/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-
     const Complaint = require('../models/Complaint');
 
     if (!mongoose.Types.ObjectId.isValid(userId)) {
