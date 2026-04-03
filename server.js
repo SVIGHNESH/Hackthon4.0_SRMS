@@ -41,10 +41,14 @@ connectCloudinary();
 const userRoutes = require('./routes/userRoutes');
 const operatorRoutes = require('./routes/operatorRoutes');
 const adminRoutes = require('./routes/adminRoutes');
+const deviceRoutes = require('./routes/deviceRoutes');
+const escalationRoutes = require('./routes/escalationRoutes');
 
 app.use("/api/users", userRoutes);
 app.use("/api/operator", operatorRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api", deviceRoutes);
+app.use("/api/admin", escalationRoutes);
 
 app.get("/", (req, res) => {
   res.json({
