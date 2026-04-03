@@ -17,8 +17,9 @@ exports.stateLogin = async (req, res) => {
         const isMatch = await bcrypt.compare(enteredPassword, state.hashed_password);
         if (!isMatch) return res.status(401).json({ success: false, message: "Invalid password" });
 
-        const token = jwt.sign({ id: state._id, state_id: state.state_id }, process.env.JWT_SECRET);
-        res.json({ success: true, state, token });
+        const token = jwt.sign({ id: state._id, state_id: state.state_id }, process.env.JWT_SECRET, { expiresIn: "12h" });
+        const { hashed_password, ...safeState } = state.toObject();
+        res.json({ success: true, state: safeState, token });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -65,8 +66,9 @@ exports.municipalLogin = async (req, res) => {
         const isMatch = await bcrypt.compare(password, municipal.hashed_password);
         if (!isMatch) return res.status(401).json({ success: false, message: "Invalid password" });
 
-        const token = jwt.sign({ id: municipal._id, district_id: municipal.district_id }, process.env.JWT_SECRET);
-        res.json({ success: true, user: municipal, token });
+        const token = jwt.sign({ id: municipal._id, district_id: municipal.district_id }, process.env.JWT_SECRET, { expiresIn: "12h" });
+        const { hashed_password, ...safeMunicipal } = municipal.toObject();
+        res.json({ success: true, user: safeMunicipal, token });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -75,7 +77,13 @@ exports.municipalLogin = async (req, res) => {
 exports.fetchComplaintsByMunicipality = async (req, res) => {
     try {
         const { municipalityName } = req.body;
-        const complaints = await Complaint.find({ municipalityName: municipalityName });
+        if (!municipalityName) {
+            return res.json({ success: true, complaints: [] });
+        }
+        const name = municipalityName.trim();
+        const complaints = await Complaint.find({ 
+            municipalityName: { $regex: new RegExp("^" + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + "$", "i") } 
+        });
         res.json({ success: true, complaints: complaints || [] });
     } catch (error) {
         res.json({ success: false, message: error.message });
@@ -120,27 +128,31 @@ exports.getStateStats = async (req, res) => {
     }
 };
 
+const { normaliseStatus, isValidStatus, CANONICAL_STATUSES } = require('../utils/statusHelper');
+
 exports.updateComplaintStatus = async (req, res) => {
     try {
         const { complaintId, status, assignedTo } = req.body;
         
-        const validStatuses = ['pending', 'in-progress', 'solved', 'escalated'];
-        if (status && !validStatuses.includes(status)) {
+        const normalizedStatus = normaliseStatus(status);
+        if (!isValidStatus(normalizedStatus)) {
             return res.status(400).json({ success: false, message: `Invalid status` });
         }
         
-        const updateData = {};
-        if (status) updateData.status = status;
-        if (assignedTo) updateData.assignedTo = assignedTo;
-        updateData.$push = { timeline: new Date() };
-        
-        const complaint = await Complaint.findByIdAndUpdate(complaintId, updateData, { new: true });
+        const complaint = await Complaint.findById(complaintId);
         
         if (!complaint) {
             return res.status(404).json({ success: false, message: 'Complaint not found' });
         }
         
-        if (status === 'solved') {
+        const previousStatus = complaint.status;
+        
+        complaint.status = normalizedStatus;
+        if (assignedTo) complaint.assignedTo = assignedTo;
+        complaint.timeline.push({ status: previousStatus, description: `Status changed to ${normalizedStatus}`, date: new Date() });
+        await complaint.save();
+        
+        if (previousStatus !== 'Solved' && normalizedStatus === 'Solved') {
             await Municipal.findOneAndUpdate(
                 { district_name: complaint.municipalityName },
                 { $inc: { solved: 1, pending: -1 } }
@@ -156,6 +168,11 @@ exports.updateComplaintStatus = async (req, res) => {
 exports.getComplaintById = async (req, res) => {
     try {
         const { id } = req.params;
+        
+        if (!id.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(400).json({ success: false, message: 'Invalid complaint ID format' });
+        }
+        
         const complaint = await Complaint.findById(id);
         
         if (!complaint) {
@@ -164,6 +181,9 @@ exports.getComplaintById = async (req, res) => {
         
         res.json({ success: true, complaint });
     } catch (error) {
+        if (error.name === "CastError") {
+            return res.status(400).json({ success: false, message: 'Invalid complaint ID format' });
+        }
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -188,26 +208,17 @@ exports.uploadEvidence = async (req, res) => {
             uploadStream.end(file.buffer);
         });
         
-        const complaint = await Complaint.findByIdAndUpdate(
-            complaintId,
-            {
-                evidenceUrl: result.secure_url,
-                status: 'solved',
-                $push: { timeline: new Date() }
-            },
-            { new: true }
-        );
+        const complaint = await Complaint.findById(complaintId);
         
         if (!complaint) {
             return res.status(404).json({ success: false, message: 'Complaint not found' });
         }
         
-        await Municipal.findOneAndUpdate(
-            { district_name: complaint.municipalityName },
-            { $inc: { solved: 1, pending: -1 } }
-        );
+        complaint.evidenceUrl = result.secure_url;
+        complaint.timeline.push({ status: complaint.status, description: 'Evidence uploaded', date: new Date() });
+        await complaint.save();
         
-        res.json({ success: true, url: result.secure_url, complaint, message: 'Evidence uploaded and complaint marked as solved' });
+        res.json({ success: true, url: result.secure_url, complaint, message: 'Evidence uploaded successfully. Use /complaint/update to mark as solved.' });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -217,31 +228,45 @@ exports.getComplaintsWithFilters = async (req, res) => {
     try {
         const { municipalityName, status, category, date, complaintId, page = 1, limit = 10 } = req.body;
         
+        const safeLimit = Math.min(50, Math.max(1, parseInt(limit) || 10));
+        const safePage = Math.max(1, parseInt(page) || 1);
+        
         const query = {};
-        if (municipalityName) query.municipalityName = municipalityName;
+        if (municipalityName) {
+            const name = municipalityName.trim();
+            query.municipalityName = { $regex: new RegExp("^" + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + "$", "i") };
+        }
         if (status) query.status = status;
         if (category) query.type = category;
-        if (complaintId) query._id = complaintId;
+        if (complaintId) {
+            if (!complaintId.match(/^[0-9a-fA-F]{24}$/)) {
+                return res.status(400).json({ success: false, message: 'Invalid complaint ID format' });
+            }
+            query._id = complaintId;
+        }
         
         if (date) {
             const startDate = new Date(date);
+            if (isNaN(startDate.getTime())) {
+                return res.status(400).json({ success: false, message: 'Invalid date format' });
+            }
             const endDate = new Date(date);
             endDate.setHours(23, 59, 59, 999);
-            query.date = { $gte: startDate, $lte: endDate };
+            query.createdAt = { $gte: startDate, $lte: endDate };
         }
         
         const complaints = await Complaint.find(query)
-            .limit(limit * 1)
-            .skip((page - 1) * limit)
-            .sort({ date: -1 });
+            .limit(safeLimit)
+            .skip((safePage - 1) * safeLimit)
+            .sort({ createdAt: -1 });
         
         const count = await Complaint.countDocuments(query);
         
         res.json({
             success: true,
             complaints,
-            totalPages: Math.ceil(count / limit),
-            currentPage: page,
+            totalPages: Math.ceil(count / safeLimit),
+            currentPage: safePage,
             totalComplaints: count
         });
     } catch (error) {

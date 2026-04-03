@@ -5,6 +5,7 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
 const cloudinary = require('cloudinary').v2;
+const { normaliseStatus } = require('../utils/statusHelper');
 
 let genAI;
 try {
@@ -14,8 +15,17 @@ try {
     console.log("Gemini AI not configured");
 }
 
+const ALLOWED_IMAGE_HOSTS = ['res.cloudinary.com', 'cloudinary.com'];
+
 async function fetchImageAsBase64(imageUrl) {
     try {
+        const urlObj = new URL(imageUrl);
+        
+        if (!ALLOWED_IMAGE_HOSTS.includes(urlObj.hostname)) {
+            console.error(`SSRF blocked: Invalid hostname ${urlObj.hostname} in image URL`);
+            return null;
+        }
+        
         const response = await axios.get(imageUrl, { responseType: 'arraybuffer' });
         const base64 = Buffer.from(response.data).toString('base64');
         const mimeType = response.headers['content-type'] || 'image/jpeg';
@@ -41,8 +51,9 @@ exports.operatorLogin = async (req, res) => {
         const isMatch = await bcrypt.compare(password, operator.hashed_password);
         if (!isMatch) return res.status(401).json({ success: false, message: "Invalid password" });
 
-        const token = jwt.sign({ id: operator._id }, process.env.JWT_SECRET);
-        res.json({ success: true, operator, token });
+        const token = jwt.sign({ id: operator._id }, process.env.JWT_SECRET, { expiresIn: "8h" });
+        const { hashed_password, ...safeOperator } = operator.toObject();
+        res.json({ success: true, operator: safeOperator, token });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -50,8 +61,11 @@ exports.operatorLogin = async (req, res) => {
 
 exports.getAssignedComplaints = async (req, res) => {
     try {
-        const { municipality_id } = req.body;
-        const complaints = await Complaint.find({ municipality_id, status: { $ne: "Solved" } });
+        const operator = await Operator.findById(req.user.id);
+        if (!operator) return res.status(401).json({ success: false, message: "Operator not found" });
+        
+        const municipalityId = operator.municipality_id;
+        const complaints = await Complaint.find({ municipality_id: municipalityId, status: { $ne: "Solved" } });
         res.json({ success: true, complaints });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -61,9 +75,21 @@ exports.getAssignedComplaints = async (req, res) => {
 exports.verifyAndSolveComplaint = async (req, res) => {
     try {
         const { complaint_id, operator_image_url } = req.body;
+        
+        if (!complaint_id || !complaint_id.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(400).json({ success: false, message: "Invalid complaint ID format" });
+        }
+        
         const complaint = await Complaint.findById(complaint_id);
 
         if (!complaint) return res.status(404).json({ success: false, message: "Complaint not found" });
+
+        const operator = await Operator.findById(req.user.id);
+        if (!operator) return res.status(401).json({ success: false, message: "Operator not found" });
+
+        if (complaint.municipality_id && complaint.municipality_id.toString() !== operator.municipality_id?.toString()) {
+            return res.status(403).json({ success: false, message: "You can only resolve complaints from your municipality" });
+        }
 
         let geminiDecision = { is_solved: true, reason: "Manual verification" };
 
@@ -79,20 +105,24 @@ exports.verifyAndSolveComplaint = async (req, res) => {
                 const responseText = result.response.text();
                 
                 try {
-                    geminiDecision = JSON.parse(responseText);
+                    const sanitized = responseText.replace(/^\`\`\`json\s*/i, "").replace(/\`\`\`$/i, "").trim();
+                    geminiDecision = JSON.parse(sanitized);
                 } catch (e) {
-                    console.log("Failed to parse Gemini response, using default");
+                    console.log("Failed to parse Gemini response, defaulting to is_solved: false for safety");
+                    geminiDecision = { is_solved: false, reason: "Failed to parse AI response" };
                 }
             }
         }
 
         if (geminiDecision.is_solved) {
+            const previousStatus = complaint.status;
             complaint.operatorImageUrl = operator_image_url;
             complaint.status = "Solved";
             complaint.geminiVerified = true;
+            complaint.timeline.push({ status: previousStatus, description: 'AI verified resolution', date: new Date() });
             await complaint.save();
 
-            if (complaint.municipality_id) {
+            if (previousStatus !== 'Solved' && complaint.municipality_id) {
                 await Municipal.findByIdAndUpdate(complaint.municipality_id, {
                     $inc: { solved: 1, pending: -1 }
                 });
@@ -110,12 +140,31 @@ exports.verifyAndSolveComplaint = async (req, res) => {
 exports.updateComplaintStatus = async (req, res) => {
     try {
         const { complaint_id, status } = req.body;
+        
+        if (!complaint_id || !complaint_id.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(400).json({ success: false, message: "Invalid complaint ID format" });
+        }
+        
         const complaint = await Complaint.findById(complaint_id);
 
         if (!complaint) return res.status(404).json({ success: false, message: "Complaint not found" });
 
-        complaint.status = status;
+        const operator = await Operator.findById(req.user.id);
+        if (!operator) return res.status(401).json({ success: false, message: "Operator not found" });
+
+        if (complaint.municipality_id && complaint.municipality_id.toString() !== operator.municipality_id?.toString()) {
+            return res.status(403).json({ success: false, message: "You can only update complaints from your municipality" });
+        }
+
+        const previousStatus = complaint.status;
+        const normalizedStatus = normaliseStatus(status);
+        complaint.status = normalizedStatus;
+        complaint.timeline.push({ status: previousStatus, description: `Status changed to ${normalizedStatus}`, date: new Date() });
         await complaint.save();
+
+        if (previousStatus !== 'Solved' && normalizedStatus === 'Solved') {
+            await Municipal.findByIdAndUpdate(complaint.municipality_id, { $inc: { solved: 1, pending: -1 } });
+        }
 
         res.json({ success: true, complaint });
     } catch (error) {
@@ -132,7 +181,17 @@ exports.uploadOperatorEvidence = async (req, res) => {
             return res.status(400).json({ success: false, message: 'No file uploaded' });
         }
         
-        const result = await new Promise((resolve, reject) => {
+        const complaint = await Complaint.findById(complaintId);
+        if (!complaint) return res.status(404).json({ success: false, message: 'Complaint not found' });
+        
+        const operator = await Operator.findById(req.user.id);
+        if (!operator) return res.status(401).json({ success: false, message: "Operator not found" });
+
+        if (complaint.municipality_id && complaint.municipality_id.toString() !== operator.municipality_id?.toString()) {
+            return res.status(403).json({ success: false, message: "You can only upload evidence for complaints from your municipality" });
+        }
+        
+        await new Promise((resolve, reject) => {
             const uploadStream = cloudinary.uploader.upload_stream(
                 { folder: 'operator-evidence', resource_type: 'auto' },
                 (error, result) => {
@@ -143,18 +202,8 @@ exports.uploadOperatorEvidence = async (req, res) => {
             uploadStream.end(file.buffer);
         });
         
-        const complaint = await Complaint.findByIdAndUpdate(
-            complaintId,
-            {
-                operatorImageUrl: result.secure_url,
-                $push: { timeline: new Date() }
-            },
-            { new: true }
-        );
-        
-        if (!complaint) {
-            return res.status(404).json({ success: false, message: 'Complaint not found' });
-        }
+        complaint.operatorImageUrl = result.secure_url;
+        await complaint.save();
         
         res.json({ success: true, url: result.secure_url, complaint, message: 'Evidence uploaded successfully' });
     } catch (error) {

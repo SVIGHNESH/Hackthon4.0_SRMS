@@ -1,6 +1,9 @@
 const express = require('express');
 const multer = require('multer');
-const upload = multer({ memoryStorage: true });
+const upload = multer({ 
+  memoryStorage: true,
+  limits: { fileSize: 5 * 1024 * 1024 }
+});
 const cloudinary = require('cloudinary').v2;
 const { loginUser, getDashboardStats, getLeaderboard, getUserComplaints } = require('../controllers/userController');
 const router = express.Router();
@@ -13,7 +16,7 @@ router.get('/categories', require('../controllers/adminController').getComplaint
 
 router.post('/complaint', async (req, res) => {
     try {
-        const { title, location, latitude, longitude, description, user_imei, municipality_id, type } = req.body;
+        const { title, location, latitude, longitude, description, user_imei, municipality_id, municipalityName, type } = req.body;
         
         const complaint = await require('../models/Complaint').create({
             title,
@@ -23,9 +26,14 @@ router.post('/complaint', async (req, res) => {
             description,
             user_imei,
             municipality_id,
+            municipalityName,
             type,
             status: "Pending"
         });
+        
+        if (municipality_id) {
+            await require('../models/Municipal').findByIdAndUpdate(municipality_id, { $inc: { pending: 1 } });
+        }
         
         res.json({ success: true, complaint });
     } catch (error) {
@@ -35,7 +43,7 @@ router.post('/complaint', async (req, res) => {
 
 router.post('/complaint/with-image', upload.single('image'), async (req, res) => {
     try {
-        const { title, location, latitude, longitude, description, user_imei, municipality_id, type } = req.body;
+        const { title, location, latitude, longitude, description, user_imei, municipality_id, municipalityName, type } = req.body;
         
         let imageUrl = '';
         if (req.file) {
@@ -61,9 +69,14 @@ router.post('/complaint/with-image', upload.single('image'), async (req, res) =>
             imageUrl: imageUrl || req.body.imageUrl,
             user_imei,
             municipality_id,
+            municipalityName,
             type,
             status: "Pending"
         });
+        
+        if (municipality_id) {
+            await require('../models/Municipal').findByIdAndUpdate(municipality_id, { $inc: { pending: 1 } });
+        }
         
         const user = await require('../models/User').findOne({ imei_id: user_imei });
         if (user) {
