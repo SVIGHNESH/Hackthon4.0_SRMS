@@ -52,7 +52,18 @@ router.post('/auto-escalate', authMiddleware, async (req, res) => {
 
 router.get('/all-municipalities', authMiddleware, async (req, res) => {
     try {
-        const municipalities = await Municipal.find({});
+        let query = {};
+        
+        // If user is state admin (has state_id), filter by their state
+        if (req.user.state_id) {
+            query = { state_id: req.user.state_id };
+        }
+        // If user is municipality (has district_id), return only their municipality
+        else if (req.user.district_id) {
+            query = { district_id: req.user.district_id };
+        }
+        
+        const municipalities = await Municipal.find(query);
         res.json({ success: true, districts: municipalities });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
