@@ -7,14 +7,17 @@ const connectCloudinary = require('./config/cloudinary.js');
 
 const app = express();
 
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+const rawAllowedOrigins = process.env.ALLOWED_ORIGINS || '';
+const allowAllOrigins = !rawAllowedOrigins || rawAllowedOrigins.trim() === '*';
+
+const allowedOrigins = rawAllowedOrigins
   .split(',')
   .map(origin => origin.trim())
-  .filter(Boolean);
+  .filter(origin => origin && origin !== '*');
 
 const corsOptions = {
   origin: function (origin, callback) {
-    if (!origin) {
+    if (allowAllOrigins || !origin) {
       callback(null, true);
     } else if (allowedOrigins.includes(origin)) {
       callback(null, true);
