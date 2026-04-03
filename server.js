@@ -75,7 +75,11 @@ app.use((err, req, res, next) => {
   res.status(500).json({ success: false, message: err.message });
 });
 
-const port = process.env.PORT || 4000;
-app.listen(port, '0.0.0.0', () => {
-  console.log(`Unified Server has started on http://localhost:${port}/api`);
-});
+module.exports = app;
+
+if (!process.env.VERCEL) {
+  const port = process.env.PORT || 4000;
+  app.listen(port, '0.0.0.0', () => {
+    console.log(`Unified Server has started on http://localhost:${port}/api`);
+  });
+}
