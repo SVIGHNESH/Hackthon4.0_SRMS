@@ -125,7 +125,12 @@ exports.getComplaintCategories = async (req, res) => {
 
 exports.getStateStats = async (req, res) => {
     try {
-        const { state_id } = req.body;
+        const state_id = req.user.state_id;
+        
+        if (!state_id) {
+            return res.status(401).json({ success: false, message: 'Invalid token - no state_id' });
+        }
+        
         const municipalities = await Municipal.find({ state_id });
         
         let totalSolved = 0;
