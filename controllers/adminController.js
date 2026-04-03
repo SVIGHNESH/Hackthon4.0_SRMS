@@ -9,12 +9,19 @@ const upload = multer({ memoryStorage: true });
 
 exports.stateLogin = async (req, res) => {
     try {
-        const { enteredUserName, enteredPassword } = req.body;
+        const { username, password, enteredUserName, enteredPassword } = req.body;
         
-        const state = await State.findOne({ official_username: enteredUserName });
+        const user = username || enteredUserName;
+        const pass = password || enteredPassword;
+        
+        if (!user || !pass) {
+            return res.status(400).json({ success: false, message: "Username and password are required" });
+        }
+        
+        const state = await State.findOne({ official_username: user });
         if (!state) return res.status(401).json({ success: false, message: "User not found" });
 
-        const isMatch = await bcrypt.compare(enteredPassword, state.hashed_password);
+        const isMatch = await bcrypt.compare(pass, state.hashed_password);
         if (!isMatch) return res.status(401).json({ success: false, message: "Invalid password" });
 
         const token = jwt.sign({ id: state._id, state_id: state.state_id }, process.env.JWT_SECRET, { expiresIn: "12h" });
@@ -58,17 +65,24 @@ exports.fetchDistrictById = async (req, res) => {
 
 exports.municipalLogin = async (req, res) => {
     try {
-        const { username, password } = req.body;
+        const { username, password, enteredUserName, enteredPassword } = req.body;
         
-        const municipal = await Municipal.findOne({ official_username: username });
+        const user = username || enteredUserName;
+        const pass = password || enteredPassword;
+        
+        if (!user || !pass) {
+            return res.status(400).json({ success: false, message: "Username and password are required" });
+        }
+        
+        const municipal = await Municipal.findOne({ official_username: user });
         if (!municipal) return res.status(401).json({ success: false, message: "User not found" });
 
-        const isMatch = await bcrypt.compare(password, municipal.hashed_password);
+        const isMatch = await bcrypt.compare(pass, municipal.hashed_password);
         if (!isMatch) return res.status(401).json({ success: false, message: "Invalid password" });
 
         const token = jwt.sign({ id: municipal._id, district_id: municipal.district_id }, process.env.JWT_SECRET, { expiresIn: "12h" });
         const { hashed_password, ...safeMunicipal } = municipal.toObject();
-        res.json({ success: true, user: safeMunicipal, token });
+        res.json({ success: true, operator: safeMunicipal, token });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
