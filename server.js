@@ -29,7 +29,7 @@ const corsOptions = {
 };
 
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "30mb" }));
 app.use(cors(corsOptions));
 
 const rateLimiter = require('./middleware/rateLimiter');
@@ -74,15 +74,15 @@ app.use((req, res) => {
 app.use((err, req, res, next) => {
   const requestId = req.requestId || 'unknown';
   console.error(`[ERR ${requestId}] Global error handler:`, err);
-  
+
   if (err.name === "MongoServerError") {
     return res.status(500).json({ success: false, message: "Database operation failed" });
   }
-  
+
   if (process.env.NODE_ENV === "production") {
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
-  
+
   res.status(500).json({ success: false, message: err.message });
 });
 
