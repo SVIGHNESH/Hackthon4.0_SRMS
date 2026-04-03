@@ -38,6 +38,9 @@ router.post('/device/register', async (req, res) => {
     } catch (error) {
         if (error.code === 11000) {
             const user = await User.findOne({ imei_id: req.body.deviceId });
+            if (!user) {
+                return res.status(500).json({ success: false, message: 'User not found after duplicate error' });
+            }
             return res.json({ 
                 success: true, 
                 message: 'Device already registered',
