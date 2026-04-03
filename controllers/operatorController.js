@@ -238,8 +238,16 @@ exports.uploadOperatorEvidence = async (req, res) => {
     const { complaintId } = req.body;
     const file = req.file;
 
+    if (!complaintId || !complaintId.match(/^[0-9a-fA-F]{24}$/)) {
+      return res.status(400).json({ success: false, message: 'Invalid complaint ID format' });
+    }
+
     if (!file) {
       return res.status(400).json({ success: false, message: 'No file uploaded' });
+    }
+
+    if (!file.buffer && !file.path) {
+      return res.status(400).json({ success: false, message: 'Uploaded file data is missing' });
     }
 
     const complaint = await Complaint.findById(complaintId);
@@ -252,22 +260,35 @@ exports.uploadOperatorEvidence = async (req, res) => {
       return res.status(403).json({ success: false, message: "You can only upload evidence for complaints from your municipality" });
     }
 
-    const uploadResult = await new Promise((resolve, reject) => {
-      const uploadStream = cloudinary.uploader.upload_stream(
-        { folder: 'operator-evidence', resource_type: 'auto' },
-        (error, result) => {
-          if (error) reject(error);
-          else resolve(result);
-        }
-      );
-      uploadStream.end(file.buffer);
-    });
+    let uploadResult;
+    if (file.buffer) {
+      uploadResult = await new Promise((resolve, reject) => {
+        const uploadStream = cloudinary.uploader.upload_stream(
+          { folder: 'operator-evidence', resource_type: 'auto' },
+          (error, result) => {
+            if (error) reject(error);
+            else resolve(result);
+          }
+        );
+        uploadStream.end(file.buffer);
+      });
+    } else {
+      uploadResult = await cloudinary.uploader.upload(file.path, {
+        folder: 'operator-evidence',
+        resource_type: 'auto'
+      });
+    }
+
+    if (!uploadResult || !uploadResult.secure_url) {
+      return res.status(500).json({ success: false, message: 'Cloudinary upload failed' });
+    }
 
     complaint.operatorImageUrl = uploadResult.secure_url;
     await complaint.save();
 
     res.json({ success: true, url: uploadResult.secure_url, complaint, message: 'Evidence uploaded successfully' });
   } catch (error) {
+    console.error('uploadOperatorEvidence error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
