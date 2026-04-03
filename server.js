@@ -35,6 +35,9 @@ app.use(cors(corsOptions));
 const rateLimiter = require('./middleware/rateLimiter');
 app.use(rateLimiter);
 
+const requestLogger = require('./middleware/requestLogger');
+app.use(requestLogger);
+
 connectDB();
 connectCloudinary();
 
@@ -69,7 +72,8 @@ app.use((req, res) => {
 });
 
 app.use((err, req, res, next) => {
-  console.error("Global error handler:", err);
+  const requestId = req.requestId || 'unknown';
+  console.error(`[ERR ${requestId}] Global error handler:`, err);
   
   if (err.name === "MongoServerError") {
     return res.status(500).json({ success: false, message: "Database operation failed" });
