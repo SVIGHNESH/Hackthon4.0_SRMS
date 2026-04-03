@@ -43,6 +43,20 @@ app.use("/api/users", userRoutes);
 app.use("/api/operator", operatorRoutes);
 app.use("/api/admin", adminRoutes);
 
+app.get("/", (req, res) => {
+  res.json({
+    success: true,
+    message: "Unified Civic Backend API",
+    version: "1.0.0",
+    status: "running",
+    endpoints: {
+      users: "/api/users",
+      operator: "/api/operator",
+      admin: "/api/admin"
+    }
+  });
+});
+
 app.use((req, res) => {
   res.status(404).json({ success: false, message: "Endpoint not found" });
 });
