@@ -252,7 +252,7 @@ exports.uploadOperatorEvidence = async (req, res) => {
       return res.status(403).json({ success: false, message: "You can only upload evidence for complaints from your municipality" });
     }
 
-    await new Promise((resolve, reject) => {
+    const uploadResult = await new Promise((resolve, reject) => {
       const uploadStream = cloudinary.uploader.upload_stream(
         { folder: 'operator-evidence', resource_type: 'auto' },
         (error, result) => {
@@ -263,10 +263,10 @@ exports.uploadOperatorEvidence = async (req, res) => {
       uploadStream.end(file.buffer);
     });
 
-    complaint.operatorImageUrl = result.secure_url;
+    complaint.operatorImageUrl = uploadResult.secure_url;
     await complaint.save();
 
-    res.json({ success: true, url: result.secure_url, complaint, message: 'Evidence uploaded successfully' });
+    res.json({ success: true, url: uploadResult.secure_url, complaint, message: 'Evidence uploaded successfully' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
