@@ -10,7 +10,8 @@ const {
   getAssignedComplaints,
   verifyAndSolveComplaint,
   updateComplaintStatus,
-  uploadOperatorEvidence
+  uploadOperatorEvidence,
+  getOperatorStats
 } = require('../controllers/operatorController');
 
 const router = express.Router();
