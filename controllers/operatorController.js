@@ -81,6 +81,15 @@ function bufferToDataUri(file) {
   return `data:${mimeType};base64,${base64Data}`;
 }
 
+function extractJsonObjectFromText(text) {
+  if (!text || typeof text !== 'string') return null;
+  const trimmed = text.trim();
+  const start = trimmed.indexOf('{');
+  const end = trimmed.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) return null;
+  return trimmed.slice(start, end + 1);
+}
+
 exports.operatorLogin = async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -129,6 +138,7 @@ exports.verifyAndSolveComplaint = async (req, res) => {
       return res.status(400).json({
         success: false,
         verified: false,
+        confidence: 0,
         similarity: 0,
         threshold: CONFIDENCE_THRESHOLD,
         message: "operator_image_url is required"
@@ -178,6 +188,7 @@ exports.verifyAndSolveComplaint = async (req, res) => {
       return res.status(400).json({
         success: false,
         verified: false,
+        confidence: 0,
         similarity: 0,
         threshold: CONFIDENCE_THRESHOLD,
         message: "Invalid operator image URL"
@@ -202,6 +213,7 @@ exports.verifyAndSolveComplaint = async (req, res) => {
       return res.status(statusCode).json({
         success: false,
         verified: false,
+        confidence: safeSimilarity,
         similarity: safeSimilarity,
         threshold: CONFIDENCE_THRESHOLD,
         message,
@@ -246,9 +258,8 @@ exports.verifyAndSolveComplaint = async (req, res) => {
       reason: "AI could not verify the resolution"
     };
 
-    try {
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-      const prompt = `Image 1 is a civic complaint reported by a citizen. Image 2 is the resolution photo uploaded by the municipality operator.
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const prompt = `Image 1 is a civic complaint reported by a citizen. Image 2 is the resolution photo uploaded by the municipality operator.
 
 Analyze both carefully and rate how confident you are that Image 2 shows the RESOLVED version of the issue in Image 1.
 
@@ -259,10 +270,31 @@ Respond ONLY with a JSON object in this exact format:
 - Set "is_solved" to true ONLY if both images show the same location AND the issue appears to be resolved
 - "reason" should clearly explain why you think it's resolved or not`;
 
+    let responseText = '';
+    try {
       const result = await model.generateContent([prompt, userImagePart, operatorImagePart]);
-      const responseText = result.response.text();
+      responseText = result.response.text();
+    } catch (error) {
+      console.error('Gemini API call failed:', error?.message || error);
+      return persistAndRespondFailure(
+        502,
+        "Failed to call AI verification service.",
+        0,
+        "AI service request failed"
+      );
+    }
+
+    try {
       const sanitized = responseText.replace(/^\`\`\`json\s*/i, "").replace(/\`\`\`$/i, "").trim();
-      const parsed = JSON.parse(sanitized);
+      let parsed;
+
+      try {
+        parsed = JSON.parse(sanitized);
+      } catch (parseError) {
+        const extracted = extractJsonObjectFromText(sanitized);
+        if (!extracted) throw parseError;
+        parsed = JSON.parse(extracted);
+      }
 
       geminiDecision = {
         is_solved: parsed.is_solved === true,
@@ -272,6 +304,10 @@ Respond ONLY with a JSON object in this exact format:
           : "AI could not explain the verification result"
       };
     } catch (error) {
+      console.error('Gemini response parse failed:', {
+        error: error?.message || String(error),
+        responsePreview: responseText ? responseText.slice(0, 600) : 'empty response'
+      });
       return persistAndRespondFailure(
         502,
         "Failed to process AI verification response.",
@@ -307,6 +343,7 @@ Respond ONLY with a JSON object in this exact format:
       return res.json({
         success: true,
         verified: true,
+        confidence: similarity,
         similarity,
         threshold: CONFIDENCE_THRESHOLD,
         message: "Issue verified and resolved successfully!",
@@ -325,6 +362,7 @@ Respond ONLY with a JSON object in this exact format:
     return res.status(400).json({
       success: false,
       verified: false,
+      confidence: similarity,
       similarity,
       threshold: CONFIDENCE_THRESHOLD,
       message: geminiDecision.is_solved
