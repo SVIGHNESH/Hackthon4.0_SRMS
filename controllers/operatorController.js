@@ -233,45 +233,6 @@ exports.getOperatorStats = async (req, res) => {
   }
 };
 
-//exports.uploadOperatorEvidence = async (req, res) => {
-// try {
-//  const { complaintId } = req.body;
-// const file = req.file;
-
-//  if (!file) {
-//  return res.status(400).json({ success: false, message: 'No file uploaded' });
-// }
-
-//  const complaint = await Complaint.findById(complaintId);
-//if (!complaint) return res.status(404).json({ success: false, message: 'Complaint not found' });
-
-// const operator = await Operator.findById(req.user.id);
-//if (!operator) return res.status(401).json({ success: false, message: "Operator not found" });
-
-// if (complaint.municipality_id && complaint.municipality_id.toString() !== operator.municipality_id?.toString()) {
-//  return res.status(403).json({ success: false, message: "You can only upload evidence for complaints from your municipality" });
-// }
-
-//  await new Promise((resolve, reject) => {
-//   const uploadStream = cloudinary.uploader.upload_stream(
-//    { folder: 'operator-evidence', resource_type: 'auto' },
-//     (error, result) => {
-//        if (error) reject(error);
-//         else resolve(result);
-//       }
-//      );
-////      uploadStream.end(file.buffer);
-//    });
-//
-//   complaint.operatorImageUrl = result.secure_url;
-//    await complaint.save();
-//
-//    res.json({ success: true, url: result.secure_url, complaint, message: 'Evidence uploaded successfully' });
-//  } catch (error) {
-//    res.status(500).json({ success: false, message: error.message });
-//  }
-//};
-//
 exports.uploadOperatorEvidence = async (req, res) => {
   try {
     const { complaintId } = req.body;
@@ -291,28 +252,21 @@ exports.uploadOperatorEvidence = async (req, res) => {
       return res.status(403).json({ success: false, message: "You can only upload evidence for complaints from your municipality" });
     }
 
-    // ✅ FIXED: capture result outside callback by returning it from the Promise
-    const uploadResult = await new Promise((resolve, reject) => {
+    await new Promise((resolve, reject) => {
       const uploadStream = cloudinary.uploader.upload_stream(
         { folder: 'operator-evidence', resource_type: 'auto' },
         (error, result) => {
           if (error) reject(error);
-          else resolve(result);  // ✅ resolve with result
+          else resolve(result);
         }
       );
       uploadStream.end(file.buffer);
     });
 
-    // ✅ Now uploadResult is accessible here
-    complaint.operatorImageUrl = uploadResult.secure_url;
+    complaint.operatorImageUrl = result.secure_url;
     await complaint.save();
 
-    res.json({
-      success: true,
-      url: uploadResult.secure_url,  // Flutter reads this
-      complaint,
-      message: 'Evidence uploaded successfully'
-    });
+    res.json({ success: true, url: result.secure_url, complaint, message: 'Evidence uploaded successfully' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
