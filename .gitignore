@@ -4,3 +4,4 @@ dist
 package-lock.json
 .DS_Store
 scripts/seedDatabase.js
+scripts
